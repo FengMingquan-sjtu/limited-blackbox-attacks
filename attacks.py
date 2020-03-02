@@ -18,7 +18,8 @@ from tools.logging_utils import *
 from tools.inception_v3_imagenet import model
 from tools.imagenet_labels import label_to_name
 
-IMAGENET_PATH=""
+
+IMAGENET_PATH='tools/data/dataset'
 NUM_LABELS=1000
 SIZE = 299
 
@@ -28,8 +29,9 @@ def main(args, gpus):
         initial_img = np.asarray(Image.open(args.img_path).resize((SIZE, SIZE)))
         orig_class = args.orig_class
         initial_img = initial_img.astype(np.float32) / 255.0
+        JND = get_JND(args.path)
     else:
-        x, y = get_image(args.img_index, IMAGENET_PATH)
+        x, JND, y = get_image(args.img_index, IMAGENET_PATH)
         orig_class = y
         initial_img = x
 
@@ -42,8 +44,13 @@ def main(args, gpus):
     batch_size = args.batch_size
     out_dir = args.out_dir
     epsilon = args.epsilon
-    lower = np.clip(initial_img - args.epsilon, 0., 1.)
-    upper = np.clip(initial_img + args.epsilon, 0., 1.)
+    alpha = args.alpha
+    if args.use_JND :
+        lower = np.clip(initial_img - args.alpha * JND, 0., 1.)
+        upper = np.clip(initial_img + args.alpha * JND, 0., 1.)
+    else:
+        lower = np.clip(initial_img - args.epsilon, 0., 1.)
+        upper = np.clip(initial_img + args.epsilon, 0., 1.)
     adv = initial_img.copy() if not args.restore else \
             np.clip(np.load(args.restore), lower, upper)
     batch_per_gpu = batch_size // len(gpus)
@@ -217,7 +224,7 @@ def main(args, gpus):
 
         # SEARCH FOR LR AND EPSILON DECAY
         current_lr = max_lr
-        proposed_adv = adv - is_targeted * current_lr * np.sign(g)
+        proposed_adv = adv - is_targeted * current_lr * np.sign(g) #adv update
         prop_de = 0.0
         if l < adv_thresh and epsilon > goal_epsilon:
             prop_de = delta_epsilon
@@ -228,8 +235,8 @@ def main(args, gpus):
                 lower = np.clip(initial_img - proposed_epsilon, 0, 1)
                 upper = np.clip(initial_img + proposed_epsilon, 0, 1)
             # GENERAL LINE SEARCH
-            proposed_adv = adv - is_targeted * current_lr * np.sign(g)
-            proposed_adv = np.clip(proposed_adv, lower, upper)
+            proposed_adv = adv - is_targeted * current_lr * np.sign(g)#adv update
+            proposed_adv = np.clip(proposed_adv, lower, upper)#adv update
             num_queries += 1
             if robust_in_top_k(target_class, proposed_adv, k):
                 if prop_de > 0:
@@ -274,6 +281,7 @@ def main(args, gpus):
             scipy.misc.imsave(os.path.join(out_dir, '%s.png' % (i+1)), adv)
     log_output(sess, eval_logits, eval_preds, x, adv, initial_img, \
             target_class, out_dir, orig_class, num_queries)
+    scipy.misc.imsave(os.path.join(out_dir, 'final.png'), adv)
 
 if __name__ == '__main__':
     main()

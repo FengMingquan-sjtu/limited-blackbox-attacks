@@ -9,10 +9,11 @@ import attacks
 BATCH_SIZE = 50
 SIGMA = 1e-3
 EPSILON = 0.05
+ALPHA = 1.0
 SAMPLES_PER_DRAW = 50
 LEARNING_RATE = 1e-2
 LOG_ITERS_FACTOR = 2
-IMAGENET_PATH = ''
+IMAGENET_PATH = 'tools/data/dataset'
 
 def main():
     parser = argparse.ArgumentParser()
@@ -22,6 +23,8 @@ def main():
     parser.add_argument('--orig-class', type=int)
     parser.add_argument('--sigma', type=float, default=SIGMA)
     parser.add_argument('--epsilon', type=float, default=EPSILON)
+    parser.add_argument('--alpha', type=float, default=ALPHA, help="scaler of JND")
+    parser.add_argument('--use-JND', type=int, default=1)
     parser.add_argument('--learning-rate', type=float, default=LEARNING_RATE)
     parser.add_argument('--img-path', type=str)
     parser.add_argument('--img-index', type=int)

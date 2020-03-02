@@ -6,6 +6,13 @@ import os
 import pickle
 from matplotlib import pyplot as plt
 
+import tools.JND_spatial
+
+data_folder_name="images"
+labels_file_name="labels"
+
+
+
 def image_of_class(y, imagenet_path=None):
     """
     Gets an image of a prespecified class. To save computation time we use a
@@ -47,19 +54,27 @@ def load_image(path):
         img = img[:,:,:3]
     return img
 
+def get_JND(path):
+    JND = tools.JND_spatial.run(path)
+    JND = np.asarray(JND).astype(np.float32) / 255.0
+    JND = np.repeat(JND[:,:,np.newaxis], repeats=3, axis=2)
+    return JND
+
 def get_image(index, imagenet_path=None):
-    data_path = os.path.join(imagenet_path, 'val')
+    data_path = os.path.join(imagenet_path, data_folder_name)
     image_paths = sorted([os.path.join(data_path, i) for i in os.listdir(data_path)])
-    assert len(image_paths) == 50000
-    labels_path = os.path.join(imagenet_path, 'val.txt')
+    print(len(image_paths))
+    #assert len(image_paths) == 50000
+    labels_path = os.path.join(imagenet_path, labels_file_name)
     with open(labels_path) as labels_file:
         labels = [i.split(' ') for i in labels_file.read().strip().split('\n')]
         labels = {os.path.basename(i[0]): int(i[1]) for i in labels}
     def get(index):
         path = image_paths[index]
         x = load_image(path)
+        JND = get_JND(path)
         y = labels[os.path.basename(path)]
-        return x, y
+        return x, JND, y
     return get(index)
 
 def one_hot(index, total):
