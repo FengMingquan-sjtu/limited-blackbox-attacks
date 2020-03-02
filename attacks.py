@@ -1,6 +1,9 @@
 from PIL import Image
 import numpy as np
 import tensorflow as tf
+import logging
+#tf.get_logger().setLevel(logging.ERROR)
+logging.getLogger('tensorflow').disabled = True
 from tools.utils import *
 import json
 import pdb
@@ -16,6 +19,7 @@ import matplotlib.pyplot as plt
 from tools.logging_utils import *
 
 from tools.inception_v3_imagenet import model
+import tools.inception_v3_imagenet as incpv3
 from tools.imagenet_labels import label_to_name
 
 
@@ -96,14 +100,15 @@ def main(args, gpus):
     # TENSORBOARD SETUP
     empirical_loss = tf.placeholder(dtype=tf.float32, shape=())
     lr_placeholder = tf.placeholder(dtype=tf.float32, shape=())
-    loss_vs_queries = tf.summary.scalar('empirical loss vs queries', empirical_loss)
-    loss_vs_steps = tf.summary.scalar('empirical loss vs step', empirical_loss)
-    lr_vs_queries = tf.summary.scalar('lr vs queries', lr_placeholder)
-    lr_vs_steps = tf.summary.scalar('lr vs step', lr_placeholder)
-    writer = tf.summary.FileWriter(out_dir, graph=sess.graph)
-    log_file = open(os.path.join(out_dir, 'log.txt'), 'w+')
-    with open(os.path.join(out_dir, 'args.json'), 'w') as args_file:
-        json.dump(args.__dict__, args_file)
+    if args.save_log:
+        loss_vs_queries = tf.summary.scalar('empirical loss vs queries', empirical_loss)
+        loss_vs_steps = tf.summary.scalar('empirical loss vs step', empirical_loss)
+        lr_vs_queries = tf.summary.scalar('lr vs queries', lr_placeholder)
+        lr_vs_steps = tf.summary.scalar('lr vs step', lr_placeholder)
+        writer = tf.summary.FileWriter(out_dir, graph=sess.graph)
+        log_file = open(os.path.join(out_dir, 'log.txt'), 'w+')
+        with open(os.path.join(out_dir, 'args.json'), 'w') as args_file:
+            json.dump(args.__dict__, args_file)
 
     # LOSS FUNCTION
     def standard_loss(eval_points, noise):
@@ -195,6 +200,7 @@ def main(args, gpus):
         
 
     # MAIN LOOP
+    iters=max_iters #number of iterations of current image
     for i in range(max_iters):
         start = time.time()
         if args.visualize:
@@ -203,7 +209,9 @@ def main(args, gpus):
         # CHECK IF WE SHOULD STOP
         padv = sess.run(eval_percent_adv, feed_dict={x: adv})
         if padv == 1 and epsilon <= goal_epsilon:
-            print('[log] early stopping at iteration %d' % i)
+            if args.save_log:
+                print('[log] early stopping at iteration %d' % i)
+            iters=i
             break
 
         prev_g = g
@@ -218,7 +226,8 @@ def main(args, gpus):
         if last_ls[-1] > last_ls[0] \
            and len(last_ls) == args.plateau_length:
             if max_lr > args.min_lr:
-                print("[log] Annealing max_lr")
+                if args.save_log:
+                    print("[log] Annealing max_lr")
                 max_lr = max(max_lr / args.plateau_drop, args.min_lr)
             last_ls = []
 
@@ -256,32 +265,46 @@ def main(args, gpus):
                 if prop_de < 2e-3:
                     prop_de = 0
                 current_lr = max_lr
-                print("[log] backtracking eps to %3f" % (epsilon-prop_de,))
+                if args.save_log:
+                    print("[log] backtracking eps to %3f" % (epsilon-prop_de,))
 
         # BOOK-KEEPING STUFF
-        num_queries += args.samples_per_draw*(zero_iters if label_only else 1)
-        log_text = 'Step %05d: loss %.4f lr %.2E eps %.3f (time %.4f)' % (i, l, \
-                        current_lr, epsilon, time.time() - start)
-        log_file.write(log_text + '\n')
-        print(log_text)
+        if args.save_log:
+            num_queries += args.samples_per_draw*(zero_iters if label_only else 1)
+            log_text = 'Step %05d: loss %.4f lr %.2E eps %.3f (time %.4f)' % (i, l, \
+                            current_lr, epsilon, time.time() - start)
+            log_file.write(log_text + '\n')
+            print(log_text)
 
-        if i % log_iters == 0:
-            lvq, lvs, lrvq, lrvs = sess.run([loss_vs_queries, loss_vs_steps,
-                                             lr_vs_queries, lr_vs_steps], {
-                                                 empirical_loss:l,
-                                                 lr_placeholder:current_lr
-                                             })
-            writer.add_summary(lvq, num_queries)
-            writer.add_summary(lrvq, num_queries)
-            writer.add_summary(lvs, i)
-            writer.add_summary(lrvs, i)
+            if i % log_iters == 0:
+                lvq, lvs, lrvq, lrvs = sess.run([loss_vs_queries, loss_vs_steps,
+                                                lr_vs_queries, lr_vs_steps], {
+                                                    empirical_loss:l,
+                                                    lr_placeholder:current_lr
+                                                })
+                writer.add_summary(lvq, num_queries)
+                writer.add_summary(lrvq, num_queries)
+                writer.add_summary(lvs, i)
+                writer.add_summary(lrvs, i)
 
-        if (i+1) % args.save_iters == 0 and args.save_iters > 0:
-            np.save(os.path.join(out_dir, '%s.npy' % (i+1)), adv)
-            scipy.misc.imsave(os.path.join(out_dir, '%s.png' % (i+1)), adv)
-    log_output(sess, eval_logits, eval_preds, x, adv, initial_img, \
-            target_class, out_dir, orig_class, num_queries)
-    scipy.misc.imsave(os.path.join(out_dir, 'final.png'), adv)
+            if (i+1) % args.save_iters == 0 and args.save_iters > 0:
+                np.save(os.path.join(out_dir, '%s.npy' % (i+1)), adv)
+                scipy.misc.imsave(os.path.join(out_dir, '%s.png' % (i+1)), adv)
+        log_output(sess, eval_logits, eval_preds, x, adv, initial_img, \
+                target_class, out_dir, orig_class, num_queries)
+    if args.save_log:
+        scipy.misc.imsave(os.path.join(out_dir, 'final.png'), adv)
+    print("INFO:iters=",iters)
+    with open(os.path.join(args.out_dir,"output.txt"),'a') as f:
+        f.write("%d\n"%iters)
+    
+    sess.close()
+    tf.reset_default_graph()
+    incpv3._inception_initialized=False
+    
+
+    
+    
 
 if __name__ == '__main__':
     main()

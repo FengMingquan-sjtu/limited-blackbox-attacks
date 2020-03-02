@@ -2,14 +2,16 @@ import os
 import json
 import shutil
 import argparse
+import logging
 from tensorflow.python.client import device_lib
+
 
 import attacks 
 
 BATCH_SIZE = 50
 SIGMA = 1e-3
 EPSILON = 0.05
-ALPHA = 1.0
+ALPHA = 2.5
 SAMPLES_PER_DRAW = 50
 LEARNING_RATE = 1e-2
 LOG_ITERS_FACTOR = 2
@@ -27,15 +29,17 @@ def main():
     parser.add_argument('--use-JND', type=int, default=1)
     parser.add_argument('--learning-rate', type=float, default=LEARNING_RATE)
     parser.add_argument('--img-path', type=str)
+    parser.add_argument('--img-num', type=int, default=1, help="number of input images")
     parser.add_argument('--img-index', type=int)
     parser.add_argument('--out-dir', type=str, required=True,
                         help='dir to save to if not gridding; otherwise parent \
                         dir of grid directories')
     parser.add_argument('--log-iters', type=int, default=1)
+    parser.add_argument('--save-log', type=int, default=0, help="whether to save logger")
     parser.add_argument('--restore', type=str, help='restore path of img')
     parser.add_argument('--momentum', type=float, default=0.9)
     parser.add_argument('--max-queries', type=int, default=10000)
-    parser.add_argument('--save-iters', type=int, default=50)
+    parser.add_argument('--save-iters', type=int, default=500)
     parser.add_argument('--plateau-drop', type=float, default=2.0)
     parser.add_argument('--min-lr-ratio', type=int, default=200)
     parser.add_argument('--plateau-length', type=int, default=5)
@@ -88,6 +92,10 @@ def main():
     args_text = json.dumps(args.__dict__)
     print(args_text)
     attacks.main(args, gpus)
+    while args.img_num > 1:
+        args.img_num -= 1
+        args.img_index += 1
+        attacks.main(args,gpus)
 
 def get_available_gpus():
     local_device_protos = device_lib.list_local_devices()
