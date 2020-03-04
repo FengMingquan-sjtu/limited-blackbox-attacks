@@ -16,6 +16,7 @@ SAMPLES_PER_DRAW = 50
 LEARNING_RATE = 1e-2
 LOG_ITERS_FACTOR = 2
 IMAGENET_PATH = 'tools/data/dataset'
+#IMAGENET_PATH = 'tools/small_data'
 
 def main():
     parser = argparse.ArgumentParser()
@@ -36,6 +37,7 @@ def main():
                         dir of grid directories')
     parser.add_argument('--log-iters', type=int, default=1)
     parser.add_argument('--save-log', type=int, default=0, help="whether to save logger")
+    parser.add_argument('--save-image', type=int, default=0, help="whether to save adv images")
     parser.add_argument('--restore', type=str, help='restore path of img')
     parser.add_argument('--momentum', type=float, default=0.9)
     parser.add_argument('--max-queries', type=int, default=10000)
@@ -92,10 +94,9 @@ def main():
     args_text = json.dumps(args.__dict__)
     print(args_text)
     attacks.main(args, gpus)
-    while args.img_num > 1:
-        args.img_num -= 1
-        args.img_index += 1
-        attacks.main(args,gpus)
+
+
+
 
 def get_available_gpus():
     local_device_protos = device_lib.list_local_devices()

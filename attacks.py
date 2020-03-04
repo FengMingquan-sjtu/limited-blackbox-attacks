@@ -23,7 +23,8 @@ import tools.inception_v3_imagenet as incpv3
 from tools.imagenet_labels import label_to_name
 
 
-IMAGENET_PATH='tools/data/dataset'
+#IMAGENET_PATH='tools/small_data'
+IMAGENET_PATH = 'tools/data/dataset'
 NUM_LABELS=1000
 SIZE = 299
 
@@ -149,7 +150,7 @@ def main(args, gpus):
                 (partial_info_loss if k < NUM_LABELS else standard_loss)
     for i, device in enumerate(gpus):
         with tf.device(device):
-            print('loading on gpu %d of %d' % (i+1, len(gpus)))
+            #print('loading on gpu %d of %d' % (i+1, len(gpus)))
             noise_pos = tf.random_normal((batch_per_gpu//2,) + initial_img.shape)
             noise = tf.concat([noise_pos, -noise_pos], axis=0)
             eval_points = x + args.sigma * noise
@@ -200,103 +201,133 @@ def main(args, gpus):
         
 
     # MAIN LOOP
-    iters=max_iters #number of iterations of current image
-    for i in range(max_iters):
-        start = time.time()
-        if args.visualize:
-            render_frame(sess, adv, i, render_logits, render_feed, out_dir)
+    while args.img_num >= 1:
+        
+        img, JND, y = get_image(args.img_index, IMAGENET_PATH)
+        orig_class = y
+        target_class = pseudorandom_target(args.img_index, NUM_LABELS, orig_class)
+        initial_img = img
+        epsilon = args.epsilon
+        alpha = args.alpha
+        if args.use_JND :
+            lower = np.clip(initial_img - args.alpha * JND, 0., 1.)
+            upper = np.clip(initial_img + args.alpha * JND, 0., 1.)
+        else:
+            lower = np.clip(initial_img - args.epsilon, 0., 1.)
+            upper = np.clip(initial_img + args.epsilon, 0., 1.)
+        adv = initial_img.copy() if not args.restore else \
+                np.clip(np.load(args.restore), lower, upper)
+        batch_per_gpu = batch_size // len(gpus)
+        log_iters = args.log_iters
+        current_lr = args.learning_rate
+        queries_per_iter = args.samples_per_draw
+        max_iters = int(np.ceil(args.max_queries // queries_per_iter))
+        max_lr = args.max_lr
+        num_queries = 0
+        g = 0
+        prev_adv = adv
+        last_ls = []
 
-        # CHECK IF WE SHOULD STOP
-        padv = sess.run(eval_percent_adv, feed_dict={x: adv})
-        if padv == 1 and epsilon <= goal_epsilon:
-            if args.save_log:
-                print('[log] early stopping at iteration %d' % i)
-            iters=i
-            break
+        iters=max_iters #number of iterations of current image
+        for i in range(max_iters):
+            start = time.time()
+            if args.visualize:
+                render_frame(sess, adv, i, render_logits, render_feed, out_dir)
 
-        prev_g = g
-        l, g = get_grad(adv, args.samples_per_draw, batch_size)
-
-        # SIMPLE MOMENTUM
-        g = args.momentum * prev_g + (1.0 - args.momentum) * g
-
-        # PLATEAU LR ANNEALING
-        last_ls.append(l)
-        last_ls = last_ls[-args.plateau_length:]
-        if last_ls[-1] > last_ls[0] \
-           and len(last_ls) == args.plateau_length:
-            if max_lr > args.min_lr:
+            # CHECK IF WE SHOULD STOP
+            padv = sess.run(eval_percent_adv, feed_dict={x: adv})
+            if padv == 1 and epsilon <= goal_epsilon:
                 if args.save_log:
-                    print("[log] Annealing max_lr")
-                max_lr = max(max_lr / args.plateau_drop, args.min_lr)
-            last_ls = []
-
-        # SEARCH FOR LR AND EPSILON DECAY
-        current_lr = max_lr
-        proposed_adv = adv - is_targeted * current_lr * np.sign(g) #adv update
-        prop_de = 0.0
-        if l < adv_thresh and epsilon > goal_epsilon:
-            prop_de = delta_epsilon
-        while current_lr >= args.min_lr:
-            # PARTIAL INFORMATION ONLY
-            if k < NUM_LABELS:
-                proposed_epsilon = max(epsilon - prop_de, goal_epsilon)
-                lower = np.clip(initial_img - proposed_epsilon, 0, 1)
-                upper = np.clip(initial_img + proposed_epsilon, 0, 1)
-            # GENERAL LINE SEARCH
-            proposed_adv = adv - is_targeted * current_lr * np.sign(g)#adv update
-            proposed_adv = np.clip(proposed_adv, lower, upper)#adv update
-            num_queries += 1
-            if robust_in_top_k(target_class, proposed_adv, k):
-                if prop_de > 0:
-                    delta_epsilon = max(prop_de, 0.1)
-                    last_ls = []
-                prev_adv = adv
-                adv = proposed_adv
-                epsilon = max(epsilon - prop_de/args.conservative, goal_epsilon)
+                    print('[log] early stopping at iteration %d' % i)
+                iters=i
                 break
-            elif current_lr >= args.min_lr*2:
-                current_lr = current_lr / 2
-                #print("[log] backtracking lr to %3f" % (current_lr,))
-            else:
-                prop_de = prop_de / 2
-                if prop_de == 0:
-                    raise ValueError("Did not converge.")
-                if prop_de < 2e-3:
-                    prop_de = 0
-                current_lr = max_lr
-                if args.save_log:
-                    print("[log] backtracking eps to %3f" % (epsilon-prop_de,))
 
-        # BOOK-KEEPING STUFF
-        if args.save_log:
-            num_queries += args.samples_per_draw*(zero_iters if label_only else 1)
-            log_text = 'Step %05d: loss %.4f lr %.2E eps %.3f (time %.4f)' % (i, l, \
-                            current_lr, epsilon, time.time() - start)
-            log_file.write(log_text + '\n')
-            print(log_text)
+            prev_g = g
+            l, g = get_grad(adv, args.samples_per_draw, batch_size)
 
-            if i % log_iters == 0:
-                lvq, lvs, lrvq, lrvs = sess.run([loss_vs_queries, loss_vs_steps,
-                                                lr_vs_queries, lr_vs_steps], {
-                                                    empirical_loss:l,
-                                                    lr_placeholder:current_lr
-                                                })
-                writer.add_summary(lvq, num_queries)
-                writer.add_summary(lrvq, num_queries)
-                writer.add_summary(lvs, i)
-                writer.add_summary(lrvs, i)
+            # SIMPLE MOMENTUM
+            g = args.momentum * prev_g + (1.0 - args.momentum) * g
 
-            if (i+1) % args.save_iters == 0 and args.save_iters > 0:
-                np.save(os.path.join(out_dir, '%s.npy' % (i+1)), adv)
-                scipy.misc.imsave(os.path.join(out_dir, '%s.png' % (i+1)), adv)
-        log_output(sess, eval_logits, eval_preds, x, adv, initial_img, \
-                target_class, out_dir, orig_class, num_queries)
-    if args.save_log:
-        scipy.misc.imsave(os.path.join(out_dir, 'final.png'), adv)
-    print("INFO:iters=",iters)
-    with open(os.path.join(args.out_dir,"output.txt"),'a') as f:
-        f.write("%d\n"%iters)
+            # PLATEAU LR ANNEALING
+            last_ls.append(l)
+            last_ls = last_ls[-args.plateau_length:]
+            if last_ls[-1] > last_ls[0] \
+            and len(last_ls) == args.plateau_length:
+                if max_lr > args.min_lr:
+                    if args.save_log:
+                        print("[log] Annealing max_lr")
+                    max_lr = max(max_lr / args.plateau_drop, args.min_lr)
+                last_ls = []
+
+            # SEARCH FOR LR AND EPSILON DECAY
+            current_lr = max_lr
+            proposed_adv = adv - is_targeted * current_lr * np.sign(g) #adv update
+            prop_de = 0.0
+            if l < adv_thresh and epsilon > goal_epsilon:
+                prop_de = delta_epsilon
+            while current_lr >= args.min_lr:
+                # PARTIAL INFORMATION ONLY
+                if k < NUM_LABELS:
+                    proposed_epsilon = max(epsilon - prop_de, goal_epsilon)
+                    lower = np.clip(initial_img - proposed_epsilon, 0, 1)
+                    upper = np.clip(initial_img + proposed_epsilon, 0, 1)
+                # GENERAL LINE SEARCH
+                proposed_adv = adv - is_targeted * current_lr * np.sign(g)#adv update
+                proposed_adv = np.clip(proposed_adv, lower, upper)#adv update
+                num_queries += 1
+                if robust_in_top_k(target_class, proposed_adv, k):
+                    if prop_de > 0:
+                        delta_epsilon = max(prop_de, 0.1)
+                        last_ls = []
+                    prev_adv = adv
+                    adv = proposed_adv
+                    epsilon = max(epsilon - prop_de/args.conservative, goal_epsilon)
+                    break
+                elif current_lr >= args.min_lr*2:
+                    current_lr = current_lr / 2
+                    #print("[log] backtracking lr to %3f" % (current_lr,))
+                else:
+                    prop_de = prop_de / 2
+                    if prop_de == 0:
+                        raise ValueError("Did not converge.")
+                    if prop_de < 2e-3:
+                        prop_de = 0
+                    current_lr = max_lr
+                    if args.save_log:
+                        print("[log] backtracking eps to %3f" % (epsilon-prop_de,))
+
+            # BOOK-KEEPING STUFF
+            if args.save_log:
+                num_queries += args.samples_per_draw*(zero_iters if label_only else 1)
+                log_text = 'Step %05d: loss %.4f lr %.2E eps %.3f (time %.4f)' % (i, l, \
+                                current_lr, epsilon, time.time() - start)
+                log_file.write(log_text + '\n')
+                print(log_text)
+
+                if i % log_iters == 0:
+                    lvq, lvs, lrvq, lrvs = sess.run([loss_vs_queries, loss_vs_steps,
+                                                    lr_vs_queries, lr_vs_steps], {
+                                                        empirical_loss:l,
+                                                        lr_placeholder:current_lr
+                                                    })
+                    writer.add_summary(lvq, num_queries)
+                    writer.add_summary(lrvq, num_queries)
+                    writer.add_summary(lvs, i)
+                    writer.add_summary(lrvs, i)
+
+                if (i+1) % args.save_iters == 0 and args.save_iters > 0:
+                    np.save(os.path.join(out_dir, '%s.npy' % (i+1)), adv)
+                    scipy.misc.imsave(os.path.join(out_dir, '%s.png' % (i+1)), adv)
+            log_output(sess, eval_logits, eval_preds, x, adv, initial_img, \
+                    target_class, out_dir, orig_class, num_queries)
+        if args.save_image:
+            scipy.misc.imsave(os.path.join(out_dir, '%d.png'%args.img_index), adv)
+        #print("INFO:iters=",iters)
+        with open(os.path.join(args.out_dir,"output2.txt"),'a') as f:
+            f.write("%d\n"%iters)
+        
+        args.img_num -= 1
+        args.img_index += 1
     
     sess.close()
     tf.reset_default_graph()
