@@ -23,8 +23,8 @@ import tools.inception_v3_imagenet as incpv3
 from tools.imagenet_labels import label_to_name
 
 
-#IMAGENET_PATH='tools/small_data'
-IMAGENET_PATH = 'tools/data/dataset'
+IMAGENET_PATH='tools/small_data'
+#IMAGENET_PATH = 'tools/data/dataset'
 NUM_LABELS=1000
 SIZE = 299
 
@@ -50,6 +50,7 @@ def main(args, gpus):
     out_dir = args.out_dir
     epsilon = args.epsilon
     alpha = args.alpha
+    gamma = args.gamma
     if args.use_JND :
         lower = np.clip(initial_img - args.alpha * JND, 0., 1.)
         upper = np.clip(initial_img + args.alpha * JND, 0., 1.)
@@ -261,7 +262,7 @@ def main(args, gpus):
 
             # SEARCH FOR LR AND EPSILON DECAY
             current_lr = max_lr
-            proposed_adv = adv - is_targeted * current_lr * np.sign(g) #adv update
+            #proposed_adv = adv - is_targeted * current_lr * np.sign(g) #adv update
             prop_de = 0.0
             if l < adv_thresh and epsilon > goal_epsilon:
                 prop_de = delta_epsilon
@@ -272,7 +273,8 @@ def main(args, gpus):
                     lower = np.clip(initial_img - proposed_epsilon, 0, 1)
                     upper = np.clip(initial_img + proposed_epsilon, 0, 1)
                 # GENERAL LINE SEARCH
-                proposed_adv = adv - is_targeted * current_lr * np.sign(g)#adv update
+                #proposed_adv = adv - is_targeted * current_lr * gamma * JND * np.sign(g)#adv update
+                proposed_adv = adv - is_targeted * current_lr * np.sign(g)
                 proposed_adv = np.clip(proposed_adv, lower, upper)#adv update
                 num_queries += 1
                 if robust_in_top_k(target_class, proposed_adv, k):
